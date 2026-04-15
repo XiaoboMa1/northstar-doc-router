@@ -1,0 +1,7 @@
+{
+  "docs_dir": "./sample_docs",
+  "output_file": "./output/results.json",
+  "review_file": "./output/review.json",
+  "model": "gpt-4o-mini",
+  "keywords": ["Invoice", "Complaint", "Contract", "Refund", "Urgent"]
+}

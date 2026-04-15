@@ -1,0 +1,3 @@
+Refund Request
+
+The client has asked for a refund after duplicate billing was applied.
