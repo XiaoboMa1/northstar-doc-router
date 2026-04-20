@@ -1,0 +1,30 @@
+[
+  {
+    "doc_id": "0737159fbb16b4d3",
+    "source_path": "sample_docs/doc_005_urgent_access_issue.txt",
+    "route": "urgent",
+    "classification": {
+      "string_match": {
+        "keyword": "urgent",
+        "hits": 2,
+        "score": 1.0
+      },
+      "llm": {
+        "keyword": "urgent",
+        "score": 0.9
+      },
+      "conflict": false,
+      "final_confidence": 0.9,
+      "review_reason": null
+    },
+    "extracted_fields": {
+      "request_from": "operations team",
+      "issue": "admin panel access denied",
+      "requested_solution": "restore admin panel access",
+      "deadline": "immediate"
+    },
+    "original_text": "Urgent Access Problem\n\nThe operations team cannot access the admin panel and needs urgent help immediately.\n",
+    "batch_id": "batch_001",
+    "error_reason": null
+  }
+]

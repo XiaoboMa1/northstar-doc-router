@@ -1,7 +1,42 @@
 {
   "docs_dir": "./sample_docs",
-  "output_file": "./output/results.json",
-  "review_file": "./output/review.json",
-  "model": "gpt-4o-mini",
-  "keywords": ["Invoice", "Complaint", "Contract", "Refund", "Urgent"]
+  "miscellaneous_file": "./output/miscellaneous.json",
+  "urgent_file": "./output/urgent.json",
+  "human_review_file": "./output/human_review.json",
+  "runtime_metadata_file": "./output/runtime_metadata.json",
+  "keywords": ["invoice", "complaint", "contract", "refund", "urgent"],
+  "keyword_scoring": {
+    "min_hits_for_full_score": 2,
+    "density_threshold_for_full_score": 0.02,
+    "partial_score": 0.5,
+    "weak_score": 0.2
+  },
+  "extraction_schemas": {
+    "invoice": ["invoice_number", "amount", "vendor", "date", "items"],
+    "contract": ["parties", "effective_date", "term", "obligations", "renewal_clause"],
+    "complaint": ["customer_id", "issue_category", "severity", "timeline", "requested_resolution"],
+    "refund": ["order_id", "amount", "reason", "original_payment_method"],
+    "urgent": ["request_from", "issue", "requested_solution", "deadline"],
+    "general": ["topic", "action_items"]
+  },
+  "reconciliation": {
+    "conflict_keyword_min_score": 0.3,
+    "string_match_conflict_weight": 0.5,
+    "conflict_confidence_penalty": 0.8,
+    "llm_fallback_confidence_penalty": 0.5,
+    "llm_low_confidence_threshold": 0.5
+  },
+  "batching": {
+    "model_context_window": 128000,
+    "prompt_overhead_tokens": 500,
+    "output_margin_per_doc_tokens": 300,
+    "max_single_doc_tokens": 50000
+  },
+  "llm": {
+    "max_retries": 3,
+    "retry_backoff_base_seconds": 1.0,
+    "retry_on_status": [429, 500, 502, 503, 504],
+    "json_mode": true
+  },
+  "inline_text_max_chars": 10000
 }

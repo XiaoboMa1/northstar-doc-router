@@ -1,0 +1,255 @@
+// Documentation-only template. This file is JSONC (JSON with // comments) and
+// is NOT parsed at runtime. Production code writes each block below as an
+// independent file under output/. Separators below indicate the target file.
+// See note/impl-spec.md §2 for the routing contract and note/workflow.md for
+// end-to-end examples.
+//
+// Routing rules:
+//   miscellaneous.json : route != "urgent" AND review_reason is null
+//   urgent.json        : route == "urgent"
+//   human_review.json  : review_reason is not null
+//   runtime_metadata.json : single object, one per run
+//
+// urgent.json ∩ human_review.json may overlap (same doc_id in both).
+// miscellaneous.json is disjoint from the other two.
+
+// ===== miscellaneous.json =====
+[
+  {
+    "doc_id": "5246b82fc427784e",
+    "source_path": "sample_docs/doc_001_invoice_alpha.txt",
+    "route": "invoice",
+    "classification": {
+      "string_match": {"keyword": "invoice", "hits": 2, "score": 1.0},
+      "llm": {"keyword": "invoice", "score": 0.93},
+      "conflict": false,
+      "final_confidence": 0.93,
+      "review_reason": null
+    },
+    "extracted_fields": {
+      "invoice_number": "48392",
+      "amount": null,
+      "vendor": null,
+      "date": null,
+      "items": ["April software subscription"]
+    },
+    "original_text": "Invoice 48392\n\nPlease process this invoice for the April software subscription.\nThe finance team needs it routed today.\n",
+    "batch_id": "batch_001",
+    "error_reason": null
+  },
+  {
+    "doc_id": "21b94dc9f08e9427",
+    "source_path": "sample_docs/doc_002_customer_complaint_beta.txt",
+    "route": "complaint",
+    "classification": {
+      "string_match": {"keyword": "complaint", "hits": 1, "score": 0.5},
+      "llm": {"keyword": "complaint", "score": 0.91},
+      "conflict": false,
+      "final_confidence": 0.91,
+      "review_reason": null
+    },
+    "extracted_fields": {
+      "customer_id": null,
+      "issue_category": "onboarding",
+      "severity": "medium",
+      "timeline": "unresolved",
+      "requested_resolution": "review and respond"
+    },
+    "original_text": "Customer Complaint\n\nThe customer says the onboarding team never replied and the issue remains unresolved.\nPlease review and respond.\n",
+    "batch_id": "batch_001",
+    "error_reason": null
+  },
+  {
+    "doc_id": "3c47f2a1e5d09bb8",
+    "source_path": "sample_docs/doc_003_contract_renewal_gamma.txt",
+    "route": "contract",
+    "classification": {
+      "string_match": {"keyword": "contract", "hits": 2, "score": 1.0},
+      "llm": {"keyword": "contract", "score": 0.88},
+      "conflict": false,
+      "final_confidence": 0.88,
+      "review_reason": null
+    },
+    "extracted_fields": {
+      "parties": null,
+      "effective_date": null,
+      "term": null,
+      "obligations": ["review before renewal"],
+      "renewal_clause": "end of the month"
+    },
+    "original_text": "Contract Renewal Draft\n\nThis contract should be reviewed before renewal at the end of the month.\n",
+    "batch_id": "batch_001",
+    "error_reason": null
+  },
+  {
+    "doc_id": "8e1d0a7c55ff3942",
+    "source_path": "sample_docs/doc_004_refund_request_delta.txt",
+    "route": "refund",
+    "classification": {
+      "string_match": {"keyword": "refund", "hits": 2, "score": 1.0},
+      "llm": {"keyword": "refund", "score": 0.9},
+      "conflict": false,
+      "final_confidence": 0.9,
+      "review_reason": null
+    },
+    "extracted_fields": {
+      "order_id": null,
+      "amount": null,
+      "reason": "damaged on arrival",
+      "original_payment_method": null
+    },
+    "original_text": "Refund Request\n\nCustomer requests a refund because the product arrived damaged.\n",
+    "batch_id": "batch_001",
+    "error_reason": null
+  },
+  {
+    "doc_id": "9620e12e09bca99c",
+    "source_path": "sample_docs/doc_006_general_notes.txt",
+    "route": "general",
+    "classification": {
+      "string_match": null,
+      "llm": {"keyword": "general", "score": 0.85},
+      "conflict": false,
+      "final_confidence": 0.85,
+      "review_reason": null
+    },
+    "extracted_fields": {
+      "topic": "product sync",
+      "action_items": []
+    },
+    "original_text": "Weekly Notes\n\nGeneral meeting notes from the product sync. No special routing needed.\n",
+    "batch_id": "batch_001",
+    "error_reason": null
+  },
+  // Unified unprocessed_file shape (pre-LLM gate). Lands in miscellaneous.json
+  // only (route is null AND review_reason is null). See impl-spec §6.
+  // error_reason ∈ { non_txt_suffix | non_utf8_encoding | empty_file | oversize }.
+  {
+    "doc_id": "deadbeefcafef00d",
+    "source_path": "sample_docs/skipped_image.png",
+    "route": null,
+    "classification": {
+      "string_match": null,
+      "llm": null,
+      "conflict": false,
+      "final_confidence": 0.0,
+      "review_reason": null
+    },
+    "extracted_fields": null,
+    "original_text": null,
+    "batch_id": null,
+    "error_reason": "non_txt_suffix"
+  }
+]
+
+// ===== urgent.json =====
+// Filter: route == "urgent". Contains every urgent-routed doc regardless of
+// review_reason. A doc with route=="urgent" AND review_reason!=null appears
+// here AND in human_review.json (same doc_id, identical record). but metrics.files_proccessed and metrics.file_errors will deduplicate  
+[
+  {
+    "doc_id": "0737159fbb16b4d3",
+    "source_path": "sample_docs/doc_005_urgent_access_issue.txt",
+    "route": "urgent",
+    "classification": {
+      "string_match": {"keyword": "urgent", "hits": 2, "score": 1.0},
+      "llm": {"keyword": "urgent", "score": 0.9},
+      "conflict": false,
+      "final_confidence": 0.9,
+      "review_reason": null
+    },
+    "extracted_fields": {
+      "request_from": "operations team",
+      "issue": "admin panel access denied",
+      "requested_solution": "restore admin panel access",
+      "deadline": "immediate"
+    },
+    "original_text": "Urgent Access Problem\n\nThe operations team cannot access the admin panel and needs urgent help immediately.\n",
+    "batch_id": "batch_001",
+    "error_reason": null
+  }
+]
+
+// ===== human_review.json =====
+// Filter: review_reason is not null. review_reason ∈
+//   { conflict | low_confidence | llm_schema_mismatch
+//   | llm_envelope_error | llm_api_error | llm_response_missing }.
+// A consumer wanting the pure-conflict subset filters by
+// classification.conflict == true within this file.
+[
+  // Example: conflict — string_match says "urgent" but LLM says "complaint"
+  // with strong signals on both sides. Reconcile picks llm.keyword, sets
+  // conflict=true, review_reason="conflict". route=="complaint" so this doc
+  // does NOT appear in urgent.json.
+  {
+    "doc_id": "0737159fbb16b4d3",
+    "source_path": "sample_docs/doc_005_urgent_or_contract.txt",
+    "route": "complaint",
+    "classification": {
+      "string_match": {"keyword": "urgent", "hits": 2, "score": 1.0},
+      "llm": {"keyword": "complaint", "score": 0.6},
+      "conflict": true,
+      "final_confidence": 0.48,
+      "review_reason": "conflict"
+    },
+    "extracted_fields": {
+      "customer_id": null,
+      "issue_category": "access_denied",
+      "severity": "high",
+      "timeline": "immediate",
+      "requested_resolution": "restore admin panel access"
+    },
+    "original_text": "Urgent Access Problem\n\nThe operations team cannot access the admin panel and needs urgent help immediately.\n",
+    "batch_id": "batch_001",
+    "error_reason": null
+  },
+  // Example: llm_schema_mismatch — LLM returned a record but extracted_fields
+  // failed pydantic validation. route stays as reconciled keyword; fields
+  // null; review_reason set. error_reason = llm_schema_mismatch
+  {
+    "doc_id": "7a13c0ff55221aa0",
+    "source_path": "sample_docs/doc_007_contract_with_stray_refund.txt",
+    "route": "contract",
+    "classification": {
+      "string_match": {"keyword": "contract", "hits": 3, "score": 1.0},
+      "llm": {"keyword": "contract", "score": 0.82},
+      "conflict": false,
+      "final_confidence": 0.82,
+      "review_reason": "llm_schema_mismatch"
+    },
+    "extracted_fields": null,
+    "original_text": "Contract renewal note ... (truncated)\n",
+    "batch_id": "batch_002",
+    "error_reason": "llm_schema_mismatch"
+  }
+]
+
+// ===== runtime_metadata.json =====
+// Single object, not an array. One file per run.
+{
+  "processed_at": "2026-04-17T10:23:45Z",
+  "ended_at": "2026-04-17T10:23:47Z",
+  "model": "gpt-4o-mini",
+  "input_file_ids": [
+    "5246b82fc427784e",
+    "21b94dc9f08e9427",
+    "3c47f2a1e5d09bb8",
+    "8e1d0a7c55ff3942",
+    "0737159fbb16b4d3",
+    "9620e12e09bca99c",
+    "7a13c0ff55221aa0",
+    "deadbeefcafef00d"
+  ],
+  "metrics": {
+    "file_processed": 8,
+    "file_errors": 1,
+    "total_batches": 2,
+    "llm_calls": 2,
+    "llm_retries": 0,
+    "llm_api_errors": 0,
+    "llm_tokens_used": 612,
+    "llm_schema_mismatch": 1,
+    "llm_missing_docs": 0,
+    "duration_seconds": 2.34
+  }
+}

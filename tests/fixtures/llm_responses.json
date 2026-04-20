@@ -1,0 +1,69 @@
+{
+  "5246b82fc427784e": {
+    "doc_id": "5246b82fc427784e",
+    "keyword": "invoice",
+    "score": 0.93,
+    "extracted_fields": {
+      "invoice_number": "48392",
+      "amount": null,
+      "vendor": null,
+      "date": null,
+      "items": ["April software subscription"]
+    }
+  },
+  "21b94dc9f08e9427": {
+    "doc_id": "21b94dc9f08e9427",
+    "keyword": "complaint",
+    "score": 0.91,
+    "extracted_fields": {
+      "customer_id": null,
+      "issue_category": "onboarding",
+      "severity": "medium",
+      "timeline": "unresolved",
+      "requested_resolution": "review and respond"
+    }
+  },
+  "2aaeda1596a20541": {
+    "doc_id": "2aaeda1596a20541",
+    "keyword": "contract",
+    "score": 0.88,
+    "extracted_fields": {
+      "parties": null,
+      "effective_date": null,
+      "term": null,
+      "obligations": ["review before renewal"],
+      "renewal_clause": "end of the month"
+    }
+  },
+  "4bc7e39fb40efb1d": {
+    "doc_id": "4bc7e39fb40efb1d",
+    "keyword": "refund",
+    "score": 0.9,
+    "extracted_fields": {
+      "order_id": null,
+      "amount": null,
+      "reason": "duplicate billing",
+      "original_payment_method": null
+    }
+  },
+  "0737159fbb16b4d3": {
+    "doc_id": "0737159fbb16b4d3",
+    "keyword": "urgent",
+    "score": 0.9,
+    "extracted_fields": {
+      "request_from": "operations team",
+      "issue": "admin panel access denied",
+      "requested_solution": "restore admin panel access",
+      "deadline": "immediate"
+    }
+  },
+  "9620e12e09bca99c": {
+    "doc_id": "9620e12e09bca99c",
+    "keyword": "general",
+    "score": 0.85,
+    "extracted_fields": {
+      "topic": "product sync",
+      "action_items": []
+    }
+  }
+}

@@ -1,102 +1,103 @@
-# Technical Assessment: Stabilise a Fragile Document Processor
+# doc-router
 
-Estimated time: 90-120 minutes
+A local pipeline that converts a folder of `.txt` documents into structured JSON records for downstream routing. Given a directory of text documents, the pipeline:
 
-## Background
+1. scans recursively, rejecting unreadable documents at a pre-LLM gate
+2. call llm to classify the file and extract following a defined schema, plus calculating string match results for cross-reference
+3. reconciles the two results through a decision tree
+4. validates the model's structured output against the defined schema
+5. writes four JSONs: three record views and one run-metadata file.
 
-You have inherited a small internal Python prototype that loops through text documents, sends them to an LLM, assigns a rough route such as invoice or complaint, and writes local output files.
+## File Structure And Responsibility
 
-The prototype was rushed, and the current code does not meet normal engineering standards.
+```
+doc-router/
+├── app.py                  entry point. Loads .env and config.json, validates
+│                           required fields, constructs the OpenAI client and
+│                           MetricsCollector, calls pipeline.run, hands records
+│                           to file_store, prints a metrics summary on exit.
+├── pipeline.py             orchestration. Recursive scan, pre-LLM gate,
+│                           sha256 doc_id, tiktoken counting, batch packing,
+│                           LLM dispatch, per-document result mapping and schema
+│                           check, record assembly.
+├── llm_service.py          LLM boundary. Prompt construction with the schema
+│                           map and the list of expected doc_ids, retry on
+│                           transient status codes, JSON parsing with code-
+│                           fence tolerance, pydantic envelope validation,
+│                           return per-doc results or a structured failure.
+├── classifier.py           pure decision logic. keyword_score and reconcile
+│                           only.
+├── file_store.py           persistence. Splits records into the three
+│                           view files, assembles runtime_metadata.json, handles
+│                           per-file OSError.
+├── metrics.py              MetricsCollector dataclass and a one-line show().
+├── config.json             runtime policy: paths, keywords, extraction
+│                           schemas, reconciliation thresholds, batching
+│                           budget, retry parameters.
+├── .env.example            OPENAI_API_KEY, MODEL_NAME template.
+├── output_template.json    documented example of all four output files.
+├── sample_docs/            including one deliberate conflict case between keyword and LLM.
+├── output/                 miscellaneous.json, urgent.json,
+│                           human_review.json, runtime_metadata.json.
+├── design/                 dataflow and implementation specification.
+└── tests/                  see VERIFY.md.
+```
 
-You have been given the starter code as-is.
+Each module has one well-defined job, so each failure mode lives in one place: an OpenAI error can only come from `llm_service.py`, a filter rule change only touches `file_store.py`, a decision threshold change only touches `classifier.py` and `config.json`. Tests can target one module at a time with mock inputs.
 
-To make the task concrete, a small `sample_docs/` folder is included for local testing and demonstration.
+## Setup And Run
 
-## The Task
+```bash
+pip install -r requirements.txt
+cp .env.example .env            # set OPENAI_API_KEY and MODEL_NAME
+python app.py                   # reads config.json, writes output/
+python -m pytest -q             # 57 cases pass in under a second
+```
 
-Improve the starter into a small, credible local project.
+## Downstream Consumption
 
-You should make it safer, easier to run, and easier to understand while keeping the solution proportionate to the scope.
+```python
+import json
 
-Think of this as a miniature version of the kind of reusable AI-enabled component work you might do in a central AI starter-kit team.
+with open("output/urgent.json")           as f: urgent = json.load(f)
+with open("output/human_review.json")     as f: review = json.load(f)
+with open("output/runtime_metadata.json") as f: meta   = json.load(f)
 
-## What The Starter Includes
+# Route view — priority queue ingestion.
+for rec in urgent:
+    enqueue_priority(rec["doc_id"], rec["extracted_fields"], rec["source_path"])
 
-- `app.py`
-- `processor.py`
-- `llm_service.py`
-- `routes.py`
-- `file_store.py`
-- `metrics.py`
-- `.env.example`
-- `config.json`
-- `sample_docs/`
+# Risk view — strict enum dispatch, no string parsing required.
+for rec in review:
+    reason = rec["classification"]["review_reason"]
+    if reason == "conflict":
+        audit_conflict(rec)
+    elif reason in ("llm_api_error", "llm_envelope_error"):
+        page_on_call(rec)
+    else:
+        enqueue_human_review(rec)
 
-The code intentionally contains a mixture of poor practices, brittle assumptions, and missing project basics.
+# Metrics — stage-specific counters for dashboards and alerting.
+m = meta["metrics"]
+assert m["file_processed"] + m["file_errors"] == len(meta["input_file_ids"])
+emit("doc_router.llm_api_errors",      m["llm_api_errors"])
+emit("doc_router.llm_schema_mismatch", m["llm_schema_mismatch"])
+emit("doc_router.llm_missing_docs",    m["llm_missing_docs"])
+```
 
-Assume this starter reflects a rushed pilot that now needs to be made safe enough for another engineer to run and extend.
+`urgent.json` contains any docs that llm classified as urgent, while `human_review.json` covers docs that were not successfully extracted due to llm api unavailability or extracted but probably wrong due to llm hallucination (e.g., cross-reference with string match results flags a significant conflict). `miscellaneous.json` contains everything else: non-urgent documents whose `review_reason` is null. `runtime_metadata.json` carries the run-level counters and the list of `doc_id`s in the order they were processed.
 
-## What Your Solution Should Do
+## Trade-offs And Limitations
 
-Your submission should improve the project so that it:
+1. overlapping records: A document with `route == "urgent"` and a non-null `review_reason` is written into both `urgent.json` and `human_review.json`. Route priority and review risk are separate questions, and maybe required by separate consumers. The cost is duplicated storage and an extra logic to ensure file-related metrics are calculated correctly.
 
-- can be run locally with clear setup steps
-- does not keep secrets or machine-specific paths in source code
-- handles model-call failures in a visible and sensible way
-- is easier to read and maintain than the starter
-- includes basic tests
-- produces a structured output from the sample documents
-- includes a lightweight way to verify the output or routing behavior
+2. file checks and error handling: 
+- `metrics.file_errors` granularity: it counts both pre-LLM gate rejections (unreadable input) and output-write failures (disk or permission errors). 
+- An oversize document is rejected at the gate and therefore never gets a keyword-only fallback route, even though the keyword score could in principle be computed from the text the pipeline already read. 
+- Whitespace-only content (`"   \n"`) is treated as valid input and goes to the LLM, because "empty" is defined as zero decoded characters, not zero non-whitespace characters. 
 
-## Suggested Scope
+3. strict enum values for `error_reason` and `review_reason`: Consumers can filter with `==` rather than substring search. The cost is that HTTP status codes, pydantic validation messages, and truncated-JSON hints never appear in the record itself; the next step for PoC is to write them into a logger.
 
-You do not need to build a full production system.
-
-A strong solution will usually:
-
-- separate config from code
-- make the processor reusable and testable
-- keep the LLM boundary small and mockable
-- generate a clear local output format such as JSON
-- include a few focused tests or an equivalent verification step
-- document how someone else would run and extend it
-
-## Handover Artifact
-
-As part of your handover, please provide:
-
-- your improved implementation
-- a short README or runbook, approximately one page
-- a minimal dependency file
-- a few focused tests
-- the structured output produced from `sample_docs/`
-- a short note on how you verified the behavior
-
-## What We Are Assessing
-
-We are looking for:
-
-- pragmatism
-- engineering hygiene
-- reliability thinking
-- ability to work cleanly with APIs and data
-- a lightweight evaluation mindset
-- clarity of handover
-- sensible use of AI-assisted development
-
-## Submission
-
-Please provide:
-
-- your implementation
-- your README or runbook
-- your tests
-- your output artifact
-
-## Notes
-
-- This is a proof-of-concept exercise, not a production build.
-- You do not need to introduce extra infrastructure unless you believe it is justified.
-- Clear reasoning and sensible tradeoffs matter more than complexity.
-- If you make assumptions, state them clearly.
-- You may mock the model call in tests if that helps you keep the solution deterministic.
+4. llm interface:
+- OpenAI support only
+- retry behaviour has two rough edges: OpenAI SDK raises `RateLimitError` for 429, but `llm_service._invoke` treats that exception as retryable unconditionally before it looks at the status list. Separately, `Retry-After` headers from the server are ignored; the backoff is a fixed `retry_backoff_base_seconds * 2 ** attempt`; a production version would read `Retry-After` and make 429 handling opt-out through config.

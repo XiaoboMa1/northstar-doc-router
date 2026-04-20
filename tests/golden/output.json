@@ -1,0 +1,148 @@
+{
+  "documents": [
+    {
+      "doc_id": "5246b82fc427784e",
+      "source_path": "sample_docs/doc_001_invoice_alpha.txt",
+      "route": "invoice",
+      "classification": {
+        "string_match": {"keyword": "invoice", "hits": 2, "score": 1.0},
+        "llm": {"keyword": "invoice", "score": 0.93},
+        "conflict": false,
+        "final_confidence": 0.93,
+        "review_reason": null
+      },
+      "extracted_fields": {
+        "invoice_number": "48392",
+        "amount": null,
+        "vendor": null,
+        "date": null,
+        "items": ["April software subscription"]
+      },
+      "original_text": "Invoice 48392\n\nPlease process this invoice for the April software subscription.\nThe finance team needs it routed today.\n",
+      "batch_id": "batch_001",
+      "error_reason": null
+    },
+    {
+      "doc_id": "21b94dc9f08e9427",
+      "source_path": "sample_docs/doc_002_customer_complaint_beta.txt",
+      "route": "complaint",
+      "classification": {
+        "string_match": {"keyword": "complaint", "hits": 1, "score": 0.5},
+        "llm": {"keyword": "complaint", "score": 0.91},
+        "conflict": false,
+        "final_confidence": 0.91,
+        "review_reason": null
+      },
+      "extracted_fields": {
+        "customer_id": null,
+        "issue_category": "onboarding",
+        "severity": "medium",
+        "timeline": "unresolved",
+        "requested_resolution": "review and respond"
+      },
+      "original_text": "Customer Complaint\n\nThe customer says the onboarding team never replied and the issue remains unresolved.\nPlease review and respond.\n",
+      "batch_id": "batch_001",
+      "error_reason": null
+    },
+    {
+      "doc_id": "2aaeda1596a20541",
+      "source_path": "sample_docs/doc_003_contract_renewal_gamma.txt",
+      "route": "contract",
+      "classification": {
+        "string_match": {"keyword": "contract", "hits": 2, "score": 1.0},
+        "llm": {"keyword": "contract", "score": 0.88},
+        "conflict": false,
+        "final_confidence": 0.88,
+        "review_reason": null
+      },
+      "extracted_fields": {
+        "parties": null,
+        "effective_date": null,
+        "term": null,
+        "obligations": ["review before renewal"],
+        "renewal_clause": "end of the month"
+      },
+      "original_text": "Contract Renewal Draft\n\nThis contract should be reviewed before renewal at the end of the month.\n",
+      "batch_id": "batch_001",
+      "error_reason": null
+    },
+    {
+      "doc_id": "4bc7e39fb40efb1d",
+      "source_path": "sample_docs/doc_004_refund_request_delta.txt",
+      "route": "refund",
+      "classification": {
+        "string_match": {"keyword": "refund", "hits": 2, "score": 1.0},
+        "llm": {"keyword": "refund", "score": 0.9},
+        "conflict": false,
+        "final_confidence": 0.9,
+        "review_reason": null
+      },
+      "extracted_fields": {
+        "order_id": null,
+        "amount": null,
+        "reason": "duplicate billing",
+        "original_payment_method": null
+      },
+      "original_text": "Refund Request\n\nThe client has asked for a refund after duplicate billing was applied.\n",
+      "batch_id": "batch_001",
+      "error_reason": null
+    },
+    {
+      "doc_id": "0737159fbb16b4d3",
+      "source_path": "sample_docs/doc_005_urgent_access_issue.txt",
+      "route": "urgent",
+      "classification": {
+        "string_match": {"keyword": "urgent", "hits": 2, "score": 1.0},
+        "llm": {"keyword": "urgent", "score": 0.9},
+        "conflict": false,
+        "final_confidence": 0.9,
+        "review_reason": null
+      },
+      "extracted_fields": {
+        "request_from": "operations team",
+        "issue": "admin panel access denied",
+        "requested_solution": "restore admin panel access",
+        "deadline": "immediate"
+      },
+      "original_text": "Urgent Access Problem\n\nThe operations team cannot access the admin panel and needs urgent help immediately.\n",
+      "batch_id": "batch_001",
+      "error_reason": null
+    },
+    {
+      "doc_id": "9620e12e09bca99c",
+      "source_path": "sample_docs/doc_006_general_notes.txt",
+      "route": "general",
+      "classification": {
+        "string_match": null,
+        "llm": {"keyword": "general", "score": 0.85},
+        "conflict": false,
+        "final_confidence": 0.85,
+        "review_reason": null
+      },
+      "extracted_fields": {
+        "topic": "product sync",
+        "action_items": []
+      },
+      "original_text": "Weekly Notes\n\nGeneral meeting notes from the product sync. No special routing needed.\n",
+      "batch_id": "batch_001",
+      "error_reason": null
+    }
+  ],
+  "run_metadata": {
+    "processed_at": "2026-04-18T10:23:45Z",
+    "ended_at": "2026-04-18T10:23:47Z",
+    "model": "gpt-4o-mini",
+    "metrics": {
+      "file_processed": 6,
+      "file_errors": 0,
+      "total_batches": 1,
+      "llm_calls": 1,
+      "llm_retries": 0,
+      "llm_api_errors": 0,
+      "llm_tokens_used": 482,
+      "llm_schema_mismatches": 0,
+      "llm_missing_docs": 0,
+      "duration_seconds": 2.34
+    }
+  }
+}

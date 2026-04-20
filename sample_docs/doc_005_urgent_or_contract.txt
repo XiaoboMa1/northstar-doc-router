@@ -1,0 +1,3 @@
+Access Problem
+
+The customer's operational team who have signed a service contract with us complained that they cannot access the admin panel and needs help immediately. They said we have broken our contract because we promised, the service will never go down.  We must solve this issue before tomorrow. Otherwise they threaten to terminate our contract. The contract is really important.

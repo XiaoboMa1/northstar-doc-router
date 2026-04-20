@@ -1,0 +1,25 @@
+{
+  "processed_at": "2026-04-18T10:23:45Z",
+  "ended_at": "2026-04-18T10:23:47Z",
+  "model": "gpt-4o-mini",
+  "input_file_ids": [
+    "5246b82fc427784e",
+    "21b94dc9f08e9427",
+    "2aaeda1596a20541",
+    "4bc7e39fb40efb1d",
+    "0737159fbb16b4d3",
+    "9620e12e09bca99c"
+  ],
+  "metrics": {
+    "file_processed": 6,
+    "file_errors": 0,
+    "total_batches": 1,
+    "llm_calls": 1,
+    "llm_retries": 0,
+    "llm_api_errors": 0,
+    "llm_tokens_used": 482,
+    "llm_schema_mismatches": 0,
+    "llm_missing_docs": 0,
+    "duration_seconds": 2.34
+  }
+}
