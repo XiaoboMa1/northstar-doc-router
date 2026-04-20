@@ -24,7 +24,7 @@ tests/
 │                           because most behaviour is orchestration.
 ├── test_classifier.py      pure-function checks on classifier.py.
 ├── test_llm_service.py     LLM boundary behaviour in isolation: parsing,
-│                           retry, envelope validation, cross-batch
+│                           retry, top-level JSON shape check, cross-batch
 │                           metric isolation.
 ├── test_e2e.py             golden-file regression across all four outputs.
 ├── fixtures/               static model response payloads.
