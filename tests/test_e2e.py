@@ -46,48 +46,6 @@ def _normalise_paths(doc: dict, tmp_path: pathlib.Path) -> dict:
     return doc
 
 
-def _fallback_result_for_unlisted_doc(doc_id: str, content: str) -> LLMDocResult:
-    # New sample doc introduced after the fixture file was created.
-    # Keep e2e deterministic by providing a contract-shaped fallback.
-    if "Master Services Agreement" in content:
-        return LLMDocResult(
-            doc_id=doc_id,
-            keyword="contract",
-            score=0.9,
-            extracted_fields={
-                "parties": ["Acme Holdings LLC", "Beta Integrations Inc."],
-                "effective_date": "2026-05-01",
-                "term": "24 months",
-                "obligations": [
-                    "integration engineering",
-                    "platform operations",
-                    "second-tier technical support",
-                ],
-                "renewal_clause": "auto-renew 12 months unless non-renewal notice",
-            },
-        )
-
-    if "cannot access the admin panel" in content:
-        return LLMDocResult(
-            doc_id=doc_id,
-            keyword="urgent",
-            score=0.9,
-            extracted_fields={
-                "request_from": "operations team",
-                "issue": "admin panel access denied",
-                "requested_solution": "restore admin panel access",
-                "deadline": "immediate",
-            },
-        )
-
-    return LLMDocResult(
-        doc_id=doc_id,
-        keyword="general",
-        score=0.8,
-        extracted_fields={"topic": "general", "action_items": []},
-    )
-
-
 def test_e2e_golden(tmp_path, monkeypatch):
     _copy_sample_docs(tmp_path)
     cfg = write_config(tmp_path)
@@ -100,10 +58,11 @@ def test_e2e_golden(tmp_path, monkeypatch):
         metrics.llm_tokens_used += TOTAL_TOKENS
         results = []
         for d in docs:
-            if d.doc_id in canned:
-                results.append(LLMDocResult(**canned[d.doc_id]))
-            else:
-                results.append(_fallback_result_for_unlisted_doc(d.doc_id, d.content))
+            if d.doc_id not in canned:
+                raise AssertionError(
+                    f"sample doc {d.doc_id} missing from llm_responses.json fixture"
+                )
+            results.append(LLMDocResult(**canned[d.doc_id]))
         return BatchSuccess(results=results, total_tokens=TOTAL_TOKENS)
 
     # Deterministic duration + timestamps.
@@ -136,8 +95,11 @@ def test_e2e_golden(tmp_path, monkeypatch):
             _normalise_paths(doc, tmp_path)
 
     # Partition contract checks.
+    # doc_005_urgent_or_contract has string_match=contract (score 1.0) vs LLM=urgent
+    # (0.9). reconcile path B: weighted_sm = 1.0 * 0.5 = 0.5 < 0.9, so B2 silent win
+    # → route=urgent, conflict=False. It lands in urgent.json only.
     assert len(miscellaneous) == 6
-    assert len(urgent) == 1
+    assert len(urgent) == 2
     assert len(human_review) == 0
     assert all(r["route"] != "urgent" for r in miscellaneous)
     assert all(r["classification"]["review_reason"] is None for r in miscellaneous)
@@ -174,7 +136,7 @@ def test_e2e_golden(tmp_path, monkeypatch):
         runtime_metadata,
         expected_input_file_ids=expected_input_file_ids,
         metrics_overrides={
-            "file_processed": 7,
+            "file_processed": 8,
             "file_errors": 0,
             "total_batches": 1,
             "llm_calls": 1,

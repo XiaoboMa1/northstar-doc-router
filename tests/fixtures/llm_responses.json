@@ -23,8 +23,8 @@
       "requested_resolution": "review and respond"
     }
   },
-  "2aaeda1596a20541": {
-    "doc_id": "2aaeda1596a20541",
+  "f296a9e2ff9693d4": {
+    "doc_id": "f296a9e2ff9693d4",
     "keyword": "contract",
     "score": 0.88,
     "extracted_fields": {
@@ -64,6 +64,33 @@
     "extracted_fields": {
       "topic": "product sync",
       "action_items": []
+    }
+  },
+  "f85199fd31c4f1f2": {
+    "doc_id": "f85199fd31c4f1f2",
+    "keyword": "urgent",
+    "score": 0.9,
+    "extracted_fields": {
+      "request_from": "customer operations team",
+      "issue": "admin panel access denied; customer threatens to terminate the contract",
+      "requested_solution": "restore admin panel access before tomorrow",
+      "deadline": "before tomorrow"
+    }
+  },
+  "d7be57442de036f2": {
+    "doc_id": "d7be57442de036f2",
+    "keyword": "contract",
+    "score": 0.9,
+    "extracted_fields": {
+      "parties": ["Acme Holdings LLC", "Beta Integrations Inc."],
+      "effective_date": "2026-05-01",
+      "term": "24 months",
+      "obligations": [
+        "integration engineering",
+        "platform operations",
+        "second-tier technical support"
+      ],
+      "renewal_clause": "auto-renew 12 months unless non-renewal notice"
     }
   }
 }
