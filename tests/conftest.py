@@ -61,14 +61,33 @@ def _request() -> httpx.Request:
     return httpx.Request("POST", "https://api.deepseek.com/chat/completions")
 
 
-def make_api_status_error(status: int, message: str = "err") -> APIStatusError:
-    """Build a real openai.APIStatusError with a controllable status_code."""
-    response = httpx.Response(status_code=status, request=_request())
+def _headers(retry_after: Optional[str]) -> dict[str, str]:
+    return {} if retry_after is None else {"Retry-After": retry_after}
+
+
+def make_api_status_error(
+    status: int,
+    message: str = "err",
+    retry_after: Optional[str] = None,
+) -> APIStatusError:
+    """Build a real openai.APIStatusError with a controllable status_code.
+
+    `retry_after` is passed through as the raw header value so tests can cover
+    the non-numeric (HTTP-date) form as well.
+    """
+    response = httpx.Response(
+        status_code=status, request=_request(), headers=_headers(retry_after)
+    )
     return APIStatusError(message, response=response, body=None)
 
 
-def make_rate_limit_error(message: str = "rate limited") -> RateLimitError:
-    response = httpx.Response(status_code=429, request=_request())
+def make_rate_limit_error(
+    message: str = "rate limited",
+    retry_after: Optional[str] = None,
+) -> RateLimitError:
+    response = httpx.Response(
+        status_code=429, request=_request(), headers=_headers(retry_after)
+    )
     return RateLimitError(message, response=response, body=None)
 
 
@@ -186,7 +205,7 @@ def write_config(tmp_path: pathlib.Path, **overrides: Any) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# RunResult wrapper + T8-grade assertion helpers.
+# RunResult wrapper + full-record assertion helpers.
 # ---------------------------------------------------------------------------
 
 

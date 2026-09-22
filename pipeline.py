@@ -5,13 +5,17 @@ All file I/O and metric updates live here; LLM boundary is strictly inside
 
 Public entry point:
     run(config: dict, metrics: MetricsCollector, *, client=None, now=None,
-        sleep=None) -> tuple[list[dict], dict]
+        sleep=None, clock=None, call_batch_fn=None) -> tuple[list[dict], dict]
 
 Returns (records, run_metadata). file_store.write_files persists them.
+
+Section references below are to design/implementation_specification.md, called
+impl-spec.
 """
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import logging
 import os
@@ -40,19 +44,33 @@ def _doc_id(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
-def _count_tokens(text: str, model: str) -> int:
-    """tiktoken-based count with a graceful fallback to a cheap approximation
-    if tiktoken / the encoding isn't available in the test env."""
+@functools.lru_cache(maxsize=None)
+def _encoder(model: str) -> Any:
+    """Resolve the tiktoken encoder for `model`, or None if unavailable.
+
+    tiktoken fetches its BPE vocabulary over HTTP the first time an encoder is
+    built, so the outcome is cached to one attempt per process rather than one
+    per document.
+    """
     try:
         import tiktoken  # type: ignore
         try:
-            enc = tiktoken.encoding_for_model(model)
+            return tiktoken.encoding_for_model(model)
         except Exception:
-            enc = tiktoken.get_encoding("cl100k_base")
-        return len(enc.encode(text))
-    except Exception:
-        # Fallback: ~4 chars per token. Only used if tiktoken absent.
-        return max(1, len(text) // 4)
+            return tiktoken.get_encoding("cl100k_base")
+    except Exception as e:
+        logger.warning(
+            "tiktoken unavailable (%s); token counts fall back to a "
+            "character-based estimate", e,
+        )
+        return None
+
+
+def _count_tokens(text: str, model: str) -> int:
+    enc = _encoder(model)
+    if enc is None:
+        return max(1, len(text) // 4)  # ~4 chars per token
+    return len(enc.encode(text))
 
 
 def _iso_now() -> str:
@@ -61,8 +79,8 @@ def _iso_now() -> str:
 
 def _maybe_inline(text: str, limit: int) -> str:
     """Return original text up to `limit` chars; else truncate with marker.
-    See limit.md §1 — we inline by default and mark truncation, rather than
-    externalising to a sidecar file, to keep output self-contained."""
+    The text is inlined and the truncation marked so each output record stays
+    self-contained."""
     if limit <= 0 or len(text) <= limit:
         return text
     return text[:limit] + f"\n\n[...truncated; original was {len(text)} chars]"
@@ -105,7 +123,7 @@ def _scan(docs_dir: str) -> list[_ScannedDoc]:
 def _read_one(doc: _ScannedDoc, model: str, max_single_doc_tokens: int) -> None:
     """Populate doc.content / doc_id / token_count OR doc.error_reason.
 
-    error_reason uses the snake_case codes from impl-spec §3 enum table.
+    error_reason uses the snake_case codes from impl-spec §3.4 enum table.
     doc_id falls back to sha256(source_path) when content could not be read
     (non_txt_suffix / non_utf8_encoding); otherwise sha256(content).
     """
@@ -130,7 +148,7 @@ def _read_one(doc: _ScannedDoc, model: str, max_single_doc_tokens: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Batch packing (impl-spec §7)
+# Batch packing (token budget from config.batching)
 # ---------------------------------------------------------------------------
 
 
@@ -205,12 +223,12 @@ def _assemble_record(
 
 
 def _assemble_unprocessed_record(doc: _ScannedDoc) -> dict:
-    """Unified pre-LLM gate record shape (impl-spec §3 unprocessed_file).
+    """Unified pre-LLM gate record shape (impl-spec §3.3).
 
     route=null, string_match=null, llm=null, conflict=false,
     final_confidence=0.0, review_reason=null, extracted_fields=null,
     original_text=null, batch_id=null. `error_reason` is a snake_case
-    code from the §3 enum table, already set on `doc`.
+    code from the §3.4 enum table, already set on `doc`.
     """
     return {
         "doc_id": doc.doc_id,
@@ -242,6 +260,7 @@ def run(
     client: Any = None,
     sleep: Optional[Callable[[float], None]] = None,
     now: Optional[Callable[[], str]] = None,
+    clock: Optional[Callable[[], float]] = None,
     call_batch_fn: Optional[Callable] = None,
 ) -> tuple[list[dict], dict]:
     """Run the pipeline.
@@ -249,8 +268,13 @@ def run(
     `client` / `call_batch_fn` are injected so tests can replace the LLM
     boundary. Production: app.py supplies an `openai.OpenAI()` client.
     Tests: supply `call_batch_fn=MagicMock(return_value=BatchSuccess(...))`.
+
+    `now` / `sleep` / `clock` are injected for the same reason. `clock` feeds
+    `metrics.duration_seconds`, so a test that pins that value passes its own
+    monotonic source here.
     """
-    t0 = time.perf_counter()
+    clock_fn = clock or time.perf_counter
+    t0 = clock_fn()
     now = now or _iso_now
     call_fn = call_batch_fn or call_batch
     sleep_fn = sleep or time.sleep
@@ -275,6 +299,9 @@ def run(
         ),
         retry_on_status=tuple(llm_cfg_dict.get(
             "retry_on_status", (429, 500, 502, 503, 504))),
+        retry_after_cap_seconds=float(
+            llm_cfg_dict.get("retry_after_cap_seconds", 60.0)
+        ),
         json_mode=bool(llm_cfg_dict.get("json_mode", True)),
     )
 
@@ -283,9 +310,9 @@ def run(
     for d in scanned:
         _read_one(d, model=model, max_single_doc_tokens=max_single)
 
-    # Duplicate-content warning: same sha256 from different files (limit.md §11).
-    # Both records are kept; the LLM will dedup by id so the second occurrence
-    # hits the llm_response_missing path. Warned once per duplicate id.
+    # Duplicate-content warning: same sha256 from different files. Both records
+    # are kept and both read back the single result the model returns for that
+    # id. Warned once per duplicate id.
     seen_ids: dict[str, str] = {}
     for d in scanned:
         if d.error_reason == "non_txt_suffix":
@@ -299,7 +326,7 @@ def run(
             seen_ids[d.doc_id] = d.source_path
 
     # ---- 2. keyword score each ----
-    # Pre-LLM gate files get string_match=None uniformly (impl-spec §6).
+    # Pre-LLM gate files get string_match=None uniformly (impl-spec §3.3).
     # We do NOT run keyword_score on them even if content is readable
     # (e.g. oversize) — the record should not carry routing signal.
     sm_by_id: dict[str, Optional[StringMatch]] = {}
@@ -313,7 +340,7 @@ def run(
     batches = pack_batches(scanned, batching_cfg)
     metrics.total_batches += len(batches)
     # file_processed: docs that passed pre-LLM gate and entered a batch
-    # (impl-spec §9). Counted here once per doc_id; decoupled from how many
+    # (impl-spec §6.3). Counted here once per doc_id; decoupled from how many
     # output files the doc later lands in.
     metrics.file_processed += sum(len(b) for b in batches)
 
@@ -334,12 +361,12 @@ def run(
         )
         if isinstance(outcome, BatchFailure):
             # outcome.kind ∈ {"llm_api_error", "llm_envelope_error"}; strict enum
-            # carried into DocRecord.error_reason per impl-spec §3.
+            # carried into DocRecord.error_reason per impl-spec §3.4.
             for doc_id in expected_ids:
                 batch_failure_by_doc[doc_id] = outcome.kind
             continue
         assert isinstance(outcome, BatchSuccess)
-        # Drop hallucinated ids (impl-spec §10 / A15): no metric; the paired
+        # Drop hallucinated ids (impl-spec §3.2): no metric; the paired
         # expected-id absence is what gets counted as llm_missing_docs below.
         for r in outcome.results:
             if r.doc_id not in expected_ids:
@@ -355,7 +382,7 @@ def run(
 
         # 5a. Pre-LLM gate (non_txt_suffix / non_utf8_encoding / empty_file /
         # oversize) → unified unprocessed_file shape. No kw_score, no reconcile,
-        # no inline text. See impl-spec §6.
+        # no inline text. See impl-spec §3.3.
         if d.error_reason is not None:
             metrics.file_errors += 1
             records.append(_assemble_unprocessed_record(d))
@@ -363,7 +390,7 @@ def run(
 
         # 5b. Batch-level LLM failure → reconcile Path A (kw fallback).
         # batch_failure_by_doc[d.doc_id] is the strict enum kind from
-        # llm_service (impl-spec §3): "llm_api_error" | "llm_envelope_error".
+        # llm_service (impl-spec §3.4): "llm_api_error" | "llm_envelope_error".
         if d.doc_id in batch_failure_by_doc:
             kind = batch_failure_by_doc[d.doc_id]
             d.error_reason = kind
@@ -379,7 +406,7 @@ def run(
             continue
 
         # 5c. LLM batch succeeded but this expected doc_id is absent from
-        # results → count on the missing side (impl-spec §9 / A15).
+        # results → count on the missing side (impl-spec §3.2).
         llm_res = llm_by_id.get(d.doc_id)
         if llm_res is None:
             d.error_reason = "llm_response_missing"
@@ -414,7 +441,7 @@ def run(
                 config=reco_cfg,
             )
             # Unknown keyword cannot drive a valid route → degrade to "general"
-            # (impl-spec §10). review_reason already = "llm_schema_mismatch".
+            # (impl-spec §3.2). review_reason already = "llm_schema_mismatch".
             reconciled.route = "general"
             records.append(_assemble_record(
                 d, batch_id, sm,
@@ -448,7 +475,7 @@ def run(
 
     # ---- 6. run metadata ----
     ended_at = now()
-    metrics.duration_seconds = round(time.perf_counter() - t0, 3)
+    metrics.duration_seconds = round(clock_fn() - t0, 3)
     run_metadata = {
         "processed_at": processed_at,
         "ended_at": ended_at,

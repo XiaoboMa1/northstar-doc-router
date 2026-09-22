@@ -1,4 +1,5 @@
-"""File store: persist the four output artifacts per impl-spec §2.
+"""File store: persist the four output artifacts per
+design/implementation_specification.md §6.4 (impl-spec below).
 
 Writes:
   - miscellaneous.json    bare list, route != "urgent" AND review_reason is None
@@ -7,25 +8,29 @@ Writes:
   - runtime_metadata.json single object {processed_at, ended_at, model,
                                          input_file_ids, metrics}
 
-Routing matrix (impl-spec §2):
+Routing matrix (impl-spec §6.4):
   - miscellaneous is disjoint from both urgent and human_review.
   - urgent ∩ human_review may overlap (urgent doc with review_reason != null
     appears in BOTH, same record).
 
-input_file_ids is assembled here (impl-spec §2.1): ordered list of doc_id in
-the order records were processed, duplicates preserved. Ensures
+input_file_ids is assembled here: ordered list of doc_id in the order records
+were processed, duplicates preserved. Ensures
 `len(input_file_ids) == file_processed + file_errors`.
 
-final_confidence is rounded to 6 decimals at write time (impl-spec §0) to
-isolate float-noise from golden diffs. Rounding is done on a deep copy so that
-the in-memory records mutated by pipeline.run stay untouched.
+final_confidence is rounded to 6 decimals at write time so float noise does not
+show up when two runs' output files are diffed. Rounding is done on a deep copy
+so that the in-memory records mutated by pipeline.run stay untouched.
 """
 
 from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_parent(path: str) -> None:
@@ -52,7 +57,7 @@ def _round_final_confidence(records: list[dict]) -> list[dict]:
 
 
 def _partition(records: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
-    """Split into (miscellaneous, urgent, human_review) per impl-spec §2."""
+    """Split into (miscellaneous, urgent, human_review) per impl-spec §6.4."""
     miscellaneous: list[dict] = []
     urgent: list[dict] = []
     human_review: list[dict] = []
@@ -70,20 +75,79 @@ def _partition(records: list[dict]) -> tuple[list[dict], list[dict], list[dict]]
     return miscellaneous, urgent, human_review
 
 
-def write_files(records: list[dict], run_metadata: dict, config: dict) -> None:
-    """Write the four output files per impl-spec §2."""
+def _charge_failed_deliveries(
+    records: list[dict],
+    charged: set[tuple],
+    metrics: Any,
+) -> None:
+    """Move each record in a failed view file from processed to errored.
+
+    One record can sit in two view files, so a `(doc_id, source_path)` already
+    in `charged` is skipped and counts as one undelivered document.
+    """
+    if metrics is None:
+        return
+    for r in records:
+        key = (r.get("doc_id"), r.get("source_path"))
+        if key in charged:
+            continue
+        charged.add(key)
+        metrics.file_errors += 1
+        metrics.file_processed -= 1
+
+
+def write_files(
+    records: list[dict],
+    run_metadata: dict,
+    config: dict,
+    metrics: Any = None,
+) -> list[str]:
+    """Write the four output files; return the paths that could not be written.
+
+    An `OSError` on one view file does not abort the rest. Undelivered records
+    are charged to `metrics.file_errors` once each, so
+    `file_processed + file_errors == len(input_file_ids)` still holds in the
+    metadata file after a partial write. Pass `metrics=None` to skip the
+    accounting.
+    """
     rounded = _round_final_confidence(records)
     miscellaneous, urgent, human_review = _partition(rounded)
 
-    _write_json(config["miscellaneous_file"], miscellaneous)
-    _write_json(config["urgent_file"], urgent)
-    _write_json(config["human_review_file"], human_review)
+    failed_paths: list[str] = []
+    charged: set[tuple] = set()
 
+    for key, payload in (
+        ("miscellaneous_file", miscellaneous),
+        ("urgent_file", urgent),
+        ("human_review_file", human_review),
+    ):
+        path = config[key]
+        try:
+            _write_json(path, payload)
+        except OSError as e:
+            logger.error("output write failed: %s (%s)", path, e)
+            failed_paths.append(path)
+            _charge_failed_deliveries(payload, charged, metrics)
+
+    # Read the counters after the view writes so the metadata file includes
+    # the failures charged above.
+    metrics_snapshot = (
+        metrics.as_dict() if hasattr(metrics, "as_dict")
+        else run_metadata.get("metrics", {})
+    )
     runtime_metadata = {
         "processed_at": run_metadata.get("processed_at"),
         "ended_at": run_metadata.get("ended_at"),
         "model": run_metadata.get("model"),
         "input_file_ids": [r.get("doc_id") for r in rounded],
-        "metrics": run_metadata.get("metrics", {}),
+        "metrics": metrics_snapshot,
     }
-    _write_json(config["runtime_metadata_file"], runtime_metadata)
+    meta_path = config["runtime_metadata_file"]
+    try:
+        _write_json(meta_path, runtime_metadata)
+    except OSError as e:
+        # Run-level artifact, not a per-document delivery: no file_errors.
+        logger.error("output write failed: %s (%s)", meta_path, e)
+        failed_paths.append(meta_path)
+
+    return failed_paths

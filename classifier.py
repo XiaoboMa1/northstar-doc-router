@@ -7,7 +7,8 @@ Public API:
     reconcile(string_match, llm, *, schema_mismatch, missing_doc,
               batch_error_reason, config) -> Reconciled
 
-See note/impl-spec.md §5 (reconcile), §7 (scoring).
+See design/implementation_specification.md §4 (the five reconcile paths) and
+§5 (review_reason priority). Referred to as impl-spec below.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ class Reconciled:
 
 
 # ---------------------------------------------------------------------------
-# Keyword scoring (impl-spec §7)
+# Keyword scoring
 # ---------------------------------------------------------------------------
 
 
@@ -53,7 +54,7 @@ def keyword_score(
     keywords: list[str],
     scoring_config: dict,
 ) -> Optional[StringMatch]:
-    """4-tier piecewise scoring per impl-spec §7:
+    """4-tier piecewise scoring, thresholds from config.keyword_scoring:
       - hits == 0                                        → skip
       - hits >= min_hits AND density >= density_thresh   → 1.0
       - hits >= min_hits OR  density >= density_thresh   → partial_score (0.5)
@@ -95,7 +96,7 @@ def keyword_score(
 
 
 # ---------------------------------------------------------------------------
-# Reconciliation (impl-spec §5)
+# Reconciliation (impl-spec §4)
 # ---------------------------------------------------------------------------
 
 

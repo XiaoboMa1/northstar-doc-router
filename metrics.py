@@ -1,6 +1,7 @@
 """MetricsCollector: canonical per-run counters.
 
-Field set matches note/impl-spec.md §9 and output_template.json.
+Field set matches design/implementation_specification.md §6.3 and
+output_template.json.
 `file_processed + file_errors == len(input_file_ids)`.
 Incremented in-place by pipeline + llm_service; serialised into
 run_metadata.metrics at end-of-run.

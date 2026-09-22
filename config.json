@@ -36,6 +36,7 @@
     "max_retries": 3,
     "retry_backoff_base_seconds": 1.0,
     "retry_on_status": [429, 500, 502, 503, 504],
+    "retry_after_cap_seconds": 60.0,
     "json_mode": true
   },
   "inline_text_max_chars": 10000

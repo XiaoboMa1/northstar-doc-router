@@ -2,7 +2,9 @@
 
 Responsibilities (this module only):
     - Build the prompt from a batch of docs + extraction_schemas.
-    - Call OpenAI chat.completions with JSON mode + exponential-backoff retry.
+    - Call OpenAI chat.completions with JSON mode, retrying the statuses named
+      in config with exponential backoff or the server's Retry-After hint,
+      whichever asks for the longer wait.
     - Parse the response, tolerating markdown code fences.
     - Validate the outer envelope with pydantic (LLMBatchResponse).
     - Return per-doc LLMDocResult list OR BatchFailure.
@@ -11,7 +13,7 @@ Non-responsibilities (owned by pipeline):
     - Mapping doc_ids back to source docs.
     - Validating extracted_fields against extraction_schemas[keyword].
     - Updating review_reasons / route / final_confidence.
-    - Dropping hallucinated doc_idss.
+    - Dropping hallucinated doc_ids.
 
 Design notes:
     - The OpenAI client is dependency-injected (`client` arg) so tests can pass
@@ -19,8 +21,9 @@ Design notes:
     - Pydantic validates only the envelope shape (doc_id, keyword string, score
       range, extracted_fields as dict). It intentionally does NOT constrain
       `keyword` to an enum — that check lives in the pipeline so an out-of-range
-      keyword becomes a reviewable per-doc event ("llm_hallucination"), not a
-      whole-batch failure.
+      keyword becomes a reviewable per-doc event ("llm_schema_mismatch"), not a
+      whole-batch failure. See design/implementation_specification.md §3.2,
+      referred to as impl-spec below.
 """
 
 from __future__ import annotations
@@ -70,6 +73,10 @@ class LLMConfig:
     max_retries: int = 3
     retry_backoff_base_seconds: float = 1.0
     retry_on_status: tuple[int, ...] = (429, 500, 502, 503, 504)
+    # Upper bound on a server-supplied Retry-After, which can name minutes or
+    # hours. Past the cap the batch exhausts its retries into human_review.json
+    # instead of holding the run.
+    retry_after_cap_seconds: float = 60.0
     json_mode: bool = True
 
 
@@ -84,7 +91,7 @@ class BatchFailure:
     """Batch-level delivery failure.
 
     `kind` is the strict enum carried into DocRecord.error_reason
-    (impl-spec §3): one of "llm_api_error" | "llm_envelope_error".
+    (impl-spec §3.4): one of "llm_api_error" | "llm_envelope_error".
     `detail` is free-form context for logging only; it does NOT enter
     the record contract.
     """
@@ -160,7 +167,15 @@ def strip_code_fence(text: str) -> str:
 
 
 class _Retryable(Exception):
-    """Internal: API error eligible for retry."""
+    """Internal: API error eligible for retry.
+
+    `retry_after` carries the server's Retry-After header in seconds, or None
+    when it is absent or not numeric.
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class _Fatal(Exception):
@@ -204,6 +219,12 @@ def call_batch(
                     f"{e} (retries exhausted)", metrics
                 )
             backoff = config.retry_backoff_base_seconds * (2 ** attempt)
+            if e.retry_after is not None:
+                # Waiting less than the server asked for earns another
+                # rejection, so take whichever wait is longer, then clamp.
+                backoff = min(
+                    max(backoff, e.retry_after), config.retry_after_cap_seconds
+                )
             logger.warning(
                 "LLM retry %d/%d after %.2fs: %s",
                 attempt + 1,
@@ -268,10 +289,9 @@ def _invoke(client: Any, config: LLMConfig, system: str, user: str) -> Any:
             APIConnectionError,
             APIStatusError,
             APITimeoutError,
-            RateLimitError,
         )
     except ImportError:  # pragma: no cover
-        APIConnectionError = APIStatusError = APITimeoutError = RateLimitError = ()  # type: ignore[assignment]
+        APIConnectionError = APIStatusError = APITimeoutError = ()  # type: ignore[assignment]
 
     kwargs: dict[str, Any] = {
         "model": config.model,
@@ -285,18 +305,34 @@ def _invoke(client: Any, config: LLMConfig, system: str, user: str) -> Any:
 
     try:
         return client.chat.completions.create(**kwargs)
-    except RateLimitError as e:
-        raise _Retryable(f"RateLimitError: {e}") from e
     except APIStatusError as e:
+        # RateLimitError subclasses APIStatusError, so 429 is decided by
+        # config.retry_on_status like every other status.
         status = getattr(e, "status_code", None)
         detail = getattr(e, "message", str(e))
         if status in config.retry_on_status:
-            raise _Retryable(f"{status} {detail}") from e
+            raise _Retryable(f"{status} {detail}", _retry_after_seconds(e)) from e
         raise _Fatal(f"{status} {detail}") from e
     except (APIConnectionError, APITimeoutError) as e:
         raise _Retryable(f"{type(e).__name__}: {e}") from e
     except Exception as e:  # Mock side_effect, bad kwargs, etc.
         raise _Fatal(f"{type(e).__name__}: {e}") from e
+
+
+def _retry_after_seconds(exc: Any) -> float | None:
+    """Read a numeric Retry-After header off an APIStatusError.
+
+    RFC 9110 also allows the HTTP-date form; it returns None here and the
+    caller falls back to exponential backoff.
+    """
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if headers is None:
+        return None
+    try:
+        seconds = float(headers.get("retry-after"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
 
 
 def _extract_content(response: Any) -> str:
@@ -329,7 +365,7 @@ def _fail_api(detail: str, metrics: Any) -> BatchFailure:
 
 def _fail_envelope(detail: str, metrics: Any, batch_size: int) -> BatchFailure:
     """Envelope pydantic / JSON / finish_reason=length failure.
-    Per impl-spec §10 + A21: metric bucket `llm_schema_mismatch` absorbs
+    Per impl-spec §3.2: metric bucket `llm_schema_mismatch` absorbs
     envelope failures (batch_size); error_reason enum stays distinct
     (`llm_envelope_error`)."""
     logger.error("llm_envelope_error: %s", detail)

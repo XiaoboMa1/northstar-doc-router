@@ -1,14 +1,14 @@
-"""Pipeline integration tests (T6–T8, T13, T18, T19, T22, T23, T24, T25).
+"""Pipeline integration tests.
 
 Mock boundary = ``llm_service.call_batch`` via ``pipeline.run(call_batch_fn=...)``.
 Assertion granularity = full DocRecord + full runtime_metadata + cross-file
-destination + handler call-count (the T8 contract). Each test writes real
+destination + handler call-count. Each test writes real
 files with ``file_store.write_files`` and reloads four output files
 (miscellaneous.json, urgent.json, human_review.json — bare lists — plus
 runtime_metadata.json single object).
 
-Pre-LLM gate cases (T6 empty, T7 non_txt, T8 oversize, T23 non_utf8) share
-the unified unprocessed_file shape (impl-spec §6) and are covered by the
+Pre-LLM gate cases (empty, non_txt, oversize, non_utf8) share
+the unified unprocessed_file shape (impl-spec §3.3) and are covered by the
 parameterized ``test_pre_llm_gate``. Other tests remain standalone.
 """
 
@@ -79,7 +79,7 @@ def _run(cfg, stub) -> RunResult:
 
 
 # ===========================================================================
-# T6 / T7 / T8 / T23 — pre-LLM gate (parameterized)
+# Pre-LLM gate (parameterized)
 # ===========================================================================
 
 
@@ -126,9 +126,9 @@ def _mk_oversize(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("case_id,builder", [
-    ("T6_empty_file", _mk_empty),
-    ("T7_non_txt_suffix", _mk_non_txt),
-    ("T23_non_utf8_encoding", _mk_non_utf8),
+    ("empty_file", _mk_empty),
+    ("non_txt_suffix", _mk_non_txt),
+    ("non_utf8_encoding", _mk_non_utf8),
 ])
 def test_pre_llm_gate(tmp_path, case_id, builder):
     cfg = write_config(tmp_path)
@@ -165,7 +165,7 @@ def test_pre_llm_gate(tmp_path, case_id, builder):
 
 
 def test_pre_llm_gate_oversize(tmp_path, monkeypatch):
-    """T8 split out because it needs the monkeypatch fixture."""
+    """Oversize is split out because it needs the monkeypatch fixture."""
     cfg = write_config(tmp_path)
     info = _mk_oversize(tmp_path, monkeypatch)
     stub = stub_never_called()
@@ -199,10 +199,10 @@ def test_pre_llm_gate_oversize(tmp_path, monkeypatch):
 
 
 def test_files_are_created_under_tmp_path(tmp_path):
-    """Sanity check for the confusion around file creation in tests.
+    """Output files are written to disk under the configured directory.
 
-    The files are real and written to pytest's per-test tmp_path; they are
-    not created under the repository root.
+    Every other test in this module reads its assertions back from these
+    files, so this one checks they exist where the config points.
     """
     cfg = write_config(tmp_path)
     p = write_doc(
@@ -346,7 +346,7 @@ def test_mixed_complex_sample_docs(tmp_path, monkeypatch):
 
 
 # ===========================================================================
-# T13: LLM response missing a doc_id → llm_missing_docs
+# LLM response missing a doc_id → llm_missing_docs
 # ===========================================================================
 
 
@@ -407,7 +407,7 @@ def test_missing_doc_in_response(tmp_path):
 
 
 # ===========================================================================
-# T18: fabricated doc_id → dropped + metric + warning
+# Fabricated doc_id → dropped + metric + warning
 # ===========================================================================
 
 
@@ -453,7 +453,7 @@ def test_hallucinated_doc_id_dropped(tmp_path, caplog):
 
 
 # ===========================================================================
-# T19: extracted_fields schema mismatch
+# extracted_fields schema mismatch
 # ===========================================================================
 
 
@@ -495,7 +495,7 @@ def test_extracted_fields_schema_mismatch(tmp_path):
 
 
 # ===========================================================================
-# T22: urgent as a first-class route
+# Urgent as a first-class route
 # ===========================================================================
 
 
@@ -550,7 +550,7 @@ def test_urgent_as_route(tmp_path):
 
 
 # ===========================================================================
-# T24: subdirectory file is scanned recursively
+# Subdirectory file is scanned recursively
 # ===========================================================================
 
 
@@ -606,7 +606,7 @@ def test_subdirectory_file_scanned(tmp_path):
 
 
 # ===========================================================================
-# T25: duplicate content (same sha256, different file names)
+# Duplicate content (same sha256, different file names)
 # ===========================================================================
 
 
@@ -636,10 +636,9 @@ def test_duplicate_content(tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="pipeline"):
         result = _run(cfg, stub)
 
-    # Two records produced, same doc_id, different source_path. Because the
-    # LLM result map is keyed by doc_id, both records read the single result
-    # back — so both land in the normal path. The warning is the user-visible
-    # signal; the duplicate itself is not an error.
+    # Two records produced, same doc_id, different source_path. The LLM result
+    # map is keyed by doc_id, so both records read the single result back and
+    # both land in the normal path, with a warning as the only signal.
     all_recs = result.miscellaneous + result.urgent + result.human_review
     assert len(all_recs) == 2
     assert {r["doc_id"] for r in all_recs} == {shared_id}
@@ -650,6 +649,6 @@ def test_duplicate_content(tmp_path, caplog):
 
     assert any("duplicate doc_id" in rec.message for rec in caplog.records)
 
-    # input_file_ids preserves duplicates (impl-spec §2.1).
+    # input_file_ids preserves duplicates (impl-spec §6.4).
     assert result.run_metadata["input_file_ids"] == [shared_id, shared_id]
     assert result.run_metadata["metrics"]["file_processed"] == 2

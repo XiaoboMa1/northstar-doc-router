@@ -1,5 +1,7 @@
 # doc-router
 
+Built as a take-home exercise in a single evening. The limitations at the end of this file are where that time budget ran out.
+
 A local pipeline that converts a folder of `.txt` documents into structured JSON records for downstream routing. Given a directory of text documents, the pipeline:
 
 1. scans recursively, rejecting unreadable documents at a pre-LLM gate
@@ -15,7 +17,8 @@ doc-router/
 ├── app.py                  entry point. Loads .env and config.json, validates
 │                           required fields, constructs the OpenAI client and
 │                           MetricsCollector, calls pipeline.run, hands records
-│                           to file_store, prints a metrics summary on exit.
+│                           to file_store, prints a metrics summary, exits 1 if
+│                           any output file could not be written.
 ├── pipeline.py             orchestration. Recursive scan, pre-LLM gate,
 │                           sha256 doc_id, tiktoken counting, batch packing,
 │                           LLM dispatch, per-document result mapping and schema
@@ -36,10 +39,19 @@ doc-router/
 │                           budget, retry parameters.
 ├── .env.example            OPENAI_API_KEY, MODEL_NAME template.
 ├── output_template.json    documented example of all four output files.
-├── sample_docs/            including one deliberate conflict case between keyword and LLM.
+├── sample_docs/            including two deliberate keyword-vs-model
+│                           disagreements, both resolving to the model's label
+│                           without raising the conflict flag.
 ├── output/                 miscellaneous.json, urgent.json,
 │                           human_review.json, runtime_metadata.json.
-├── design/                 dataflow and implementation specification.
+├── design/
+│   ├── dataflow.md         a sequence diagram of one run, four worked
+│   │                       examples: the normal path, a pre-LLM gate
+│   │                       rejection, a whole-batch LLM failure, and a
+│   │                       per-document quality failure.
+│   └── implementation.md   module boundaries, LLM failure handling, the
+│                           five reconcile paths, the `review_reason`
+│                           priority tiers, and output schemas.
 └── tests/                  see VERIFY.md.
 ```
 
@@ -51,7 +63,7 @@ Each module has one well-defined job, so each failure mode lives in one place: a
 pip install -r requirements.txt
 cp .env.example .env            # set OPENAI_API_KEY and MODEL_NAME
 python app.py                   # reads config.json, writes output/
-python -m pytest -q             # 57 cases pass in under a second
+python -m pytest -q             # 61 cases pass in under a second
 ```
 
 ## Downstream Consumption
@@ -98,6 +110,6 @@ emit("doc_router.llm_missing_docs",    m["llm_missing_docs"])
 
 3. strict enum values for `error_reason` and `review_reason`: Consumers can filter with `==` rather than substring search. The cost is that HTTP status codes, pydantic validation messages, and truncated-JSON hints never appear in the record itself; the next step for PoC is to write them into a logger.
 
-4. llm interface:
-- OpenAI support only
-- retry behaviour has two rough edges: OpenAI SDK raises `RateLimitError` for 429, but `llm_service._invoke` treats that exception as retryable unconditionally before it looks at the status list. Separately, `Retry-After` headers from the server are ignored; the backoff is a fixed `retry_backoff_base_seconds * 2 ** attempt`; a production version would read `Retry-After` and make 429 handling opt-out through config.
+4. llm interface: OpenAI only. `llm_service.call_batch` is the single boundary a second provider would be implemented behind, but nothing else has been written against it, so the seam is untested.
+
+5. test coverage: the suite covers the control flow, the metric accounting and the output schema, the LLM boundary is mocked.

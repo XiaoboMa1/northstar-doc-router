@@ -3,9 +3,9 @@
 All tests mock the OpenAI client; no real API calls. `sleep` is injected as a
 no-op so retry tests run in microseconds.
 
-Mapping to test-spec.md: T17 (retry success), T20 (markdown code fence),
-T21 (pydantic envelope validation). Additional coverage for retry-exhausted,
-non-retryable errors, malformed JSON, rate limit, empty batch.
+Covers retry success and exhaustion, the Retry-After hint, non-retryable
+statuses, markdown code fences, pydantic envelope validation, malformed JSON,
+and the empty batch. Case groups are summarised in VERIFY.md.
 """
 
 from __future__ import annotations
@@ -128,12 +128,12 @@ def test_empty_docs_short_circuits_without_api_call(schemas, config, metrics, no
 
 
 # ===========================================================================
-# Retry behavior (T17)
+# Retry behavior
 # ===========================================================================
 
 
 def test_retry_succeeds_after_two_503s(docs, schemas, config, metrics, no_sleep):
-    # T17: attempt 1 -> 503, attempt 2 -> 503, attempt 3 -> success
+    # attempt 1 -> 503, attempt 2 -> 503, attempt 3 -> success
     client = make_client(
         [
             make_api_status_error(503),
@@ -229,7 +229,7 @@ def test_non_retryable_401_fails_immediately(docs, schemas, config, metrics, no_
 
 
 def test_markdown_code_fence_is_stripped(docs, schemas, config, metrics, no_sleep):
-    # T20: LLM wraps JSON in ```json ... ``` despite JSON mode — still parses.
+    # LLM wraps JSON in ```json ... ``` despite JSON mode — still parses.
     inner = json.dumps(
         {
             "results": [
@@ -275,7 +275,7 @@ def test_invalid_json_fails_batch_no_retry(docs, schemas, config, metrics, no_sl
 def test_pydantic_score_out_of_range_fails_batch(
     docs, schemas, config, metrics, no_sleep
 ):
-    # T21: score=1.5 violates LLMDocResult.score constraint (ge=0, le=1).
+    # score=1.5 violates LLMDocResult.score constraint (ge=0, le=1).
     bad_body = json.dumps(
         {
             "results": [
@@ -449,8 +449,71 @@ def test_backoff_uses_exponential_schedule(docs, schemas, config, metrics):
     assert calls == [0.5, 1.0, 2.0]
 
 
+def test_retry_after_header_raises_the_wait(docs, schemas, metrics):
+    """A Retry-After longer than the computed backoff wins; a shorter one
+    does not shorten the wait below the exponential schedule."""
+    cfg = LLMConfig(
+        model="gpt-4o-mini",
+        max_retries=3,
+        retry_backoff_base_seconds=0.5,
+    )
+    calls: list[float] = []
+    client = make_client(
+        [
+            make_api_status_error(429, retry_after="7"),    # 7 > 0.5
+            make_api_status_error(429, retry_after="0.1"),  # 0.1 < 1.0
+            _valid_response_for(docs),
+        ]
+    )
+
+    call_batch(docs, schemas, cfg, client, metrics, sleep=calls.append)
+
+    assert calls == [7.0, 1.0]
+
+
+def test_retry_after_is_capped(docs, schemas, metrics):
+    """An implausible Retry-After cannot stall the run indefinitely."""
+    cfg = LLMConfig(
+        model="gpt-4o-mini",
+        max_retries=3,
+        retry_backoff_base_seconds=0.5,
+        retry_after_cap_seconds=30.0,
+    )
+    calls: list[float] = []
+    client = make_client(
+        [
+            make_rate_limit_error(retry_after="3600"),
+            _valid_response_for(docs),
+        ]
+    )
+
+    call_batch(docs, schemas, cfg, client, metrics, sleep=calls.append)
+
+    assert calls == [30.0]
+
+
+def test_non_numeric_retry_after_falls_back_to_backoff(docs, schemas, metrics):
+    """Retry-After given as an HTTP date is ignored, not crashed on."""
+    cfg = LLMConfig(
+        model="gpt-4o-mini",
+        max_retries=3,
+        retry_backoff_base_seconds=0.5,
+    )
+    calls: list[float] = []
+    client = make_client(
+        [
+            make_api_status_error(503, retry_after="Wed, 21 Oct 2026 07:28:00 GMT"),
+            _valid_response_for(docs),
+        ]
+    )
+
+    call_batch(docs, schemas, cfg, client, metrics, sleep=calls.append)
+
+    assert calls == [0.5]
+
+
 # ===========================================================================
-# T26: finish_reason="length" → envelope schema_mismatch (truncated output)
+# finish_reason="length" → envelope schema_mismatch (truncated output)
 # ===========================================================================
 
 
@@ -486,16 +549,14 @@ def test_finish_reason_length_yields_batch_schema_mismatch(
 
 
 # ===========================================================================
-# T27: retry_on_status does NOT gate 429 (RateLimitError always retries)
+# retry_on_status gates 429
 # ===========================================================================
 
 
-def test_retry_on_status_config_does_not_gate_429(
-    docs, schemas, metrics, no_sleep
-):
-    """Documents limit.md §12: RateLimitError is always retryable, even if
-    429 is absent from retry_on_status. If someone fixes _classify_exc to
-    respect the config, this test flips."""
+def test_retry_on_status_config_gates_429(docs, schemas, metrics, no_sleep):
+    """429 arrives as RateLimitError, a subclass of APIStatusError, so
+    retry_on_status decides it. With 429 left out of the list it is fatal on
+    the first attempt."""
     cfg = LLMConfig(
         model="gpt-4o-mini",
         max_retries=3,
@@ -510,6 +571,24 @@ def test_retry_on_status_config_does_not_gate_429(
 
     outcome = call_batch(docs, schemas, cfg, client, metrics, sleep=no_sleep)
 
+    assert isinstance(outcome, BatchFailure)
+    assert outcome.kind == "llm_api_error"
+    assert metrics.llm_retries == 0
+    assert metrics.llm_api_errors == 1
+    assert client.chat.completions.create.call_count == 1
+
+
+def test_429_retries_when_listed_in_retry_on_status(
+    docs, schemas, config, metrics, no_sleep
+):
+    """The default config lists 429, so the same error retries and recovers."""
+    client = make_client([
+        make_rate_limit_error(),
+        _valid_response_for(docs),
+    ])
+
+    outcome = call_batch(docs, schemas, config, client, metrics, sleep=no_sleep)
+
     assert isinstance(outcome, BatchSuccess)
     assert metrics.llm_retries == 1
     assert metrics.llm_api_errors == 0
@@ -517,7 +596,7 @@ def test_retry_on_status_config_does_not_gate_429(
 
 
 # ===========================================================================
-# T28: cross-batch metrics isolation
+# Cross-batch metrics isolation
 # ===========================================================================
 
 

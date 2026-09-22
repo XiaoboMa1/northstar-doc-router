@@ -1,8 +1,9 @@
-"""End-to-end contract test (T16).
+"""End-to-end contract test.
 
 Runs the full pipeline against sample_docs/ with a stubbed call_batch_fn
 that replays canned LLM responses from tests/fixtures/llm_responses.json.
-Asserts current workflow/impl-spec contracts:
+Asserts the contracts in design/implementation_specification.md, called
+impl-spec below:
 
 - output partitioning into miscellaneous / urgent / human_review
 - runtime_metadata shape + metrics
@@ -46,7 +47,7 @@ def _normalise_paths(doc: dict, tmp_path: pathlib.Path) -> dict:
     return doc
 
 
-def test_e2e_golden(tmp_path, monkeypatch):
+def test_e2e_sample_docs(tmp_path):
     _copy_sample_docs(tmp_path)
     cfg = write_config(tmp_path)
 
@@ -67,7 +68,6 @@ def test_e2e_golden(tmp_path, monkeypatch):
 
     # Deterministic duration + timestamps.
     ticks = iter([0.0, 2.34])
-    monkeypatch.setattr(pipeline.time, "perf_counter", lambda: next(ticks))
     now_values = iter(["2026-04-18T10:23:45Z", "2026-04-18T10:23:47Z"])
 
     metrics = MetricsCollector()
@@ -77,6 +77,7 @@ def test_e2e_golden(tmp_path, monkeypatch):
         client=None,
         sleep=lambda _s: None,
         now=lambda: next(now_values),
+        clock=lambda: next(ticks),
         call_batch_fn=handler,
     )
     file_store.write_files(records, run_metadata, cfg)
@@ -119,7 +120,7 @@ def test_e2e_golden(tmp_path, monkeypatch):
         r["source_path"] for r in urgent
     )
 
-    # Scenario contract from workflow case 2B: doc_007 should be contract,
+    # Reconcile path B2 (impl-spec §4): doc_007 should be contract,
     # non-conflict (weak refund keyword match vs strong LLM contract).
     by_name = {r["source_path"].split("/")[-1]: r for r in (miscellaneous + urgent)}
     doc7 = by_name["doc_007_contract_with_stray_refund.txt"]

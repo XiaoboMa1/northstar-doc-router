@@ -1,6 +1,6 @@
 # Implementation Specification
 
-This document covers the engineering reasoning behind module boundaries, LLM failure handling, the reconcile branches, and the record schema. It is meant to be read alongside `README.md` (what/how) and `design/dataflow` (when/in what order).
+This document covers the engineering reasoning behind module boundaries, LLM failure handling, the reconcile branches, and the record schema. It is meant to be read alongside `README.md` (what/how) and `design/dataflow.md` (when/in what order).
 
 ---
 
@@ -58,10 +58,12 @@ Returned as `BatchFailure(kind=llm_api_error | llm_envelope_error)`. No per-docu
 
 | Cause | Kind | Retry | Metric |
 |---|---|---|---|
-| 429, 500, 502, 503, 504 | `llm_api_error` | yes, `retry_max_attempts` | `llm_retries++` per attempt; `llm_api_errors++` on exhaustion |
-| `RateLimitError` from SDK | `llm_api_error` | yes, unconditional | same as above |
-| Network / timeout | `llm_api_error` | yes | same |
+| Any status in `config.llm.retry_on_status`, by default 429, 500, 502, 503, 504 | `llm_api_error` | yes, up to `max_retries` | `llm_retries++` per attempt; `llm_api_errors++` on exhaustion |
+| Any other status | `llm_api_error` | no | `llm_api_errors++` |
+| Network / timeout | `llm_api_error` | yes | same as retryable statuses |
 | JSON parse fail, missing `results`, `score` out of range, `finish_reason == "length"` | `llm_envelope_error` | no | `llm_schema_mismatch` += batch size |
+
+429 arrives from the SDK as `RateLimitError`, which subclasses `APIStatusError` and is therefore decided by the same status list as everything else, so `retry_on_status` is the only place retry policy is set. The wait between attempts is `retry_backoff_base_seconds * 2 ** attempt`, raised to the server's `Retry-After` when that header asks for longer and clamped at `retry_after_cap_seconds` so one throttled batch cannot stall the run.
 
 When a `BatchFailure` comes back, the pipeline writes its `kind` into every document in that batch as `error_reason`, sets `classification.llm` to null, and mirrors `error_reason` into `review_reason` at the highest priority. This guarantees that no document whose model response is untrustworthy slips into `miscellaneous.json` unreviewed, regardless of how confident the keyword fallback looks.
 
@@ -89,7 +91,7 @@ The gate runs before any model call. Violations produce a unified unprocessed re
 | Suffix is not `.txt` | `non_txt_suffix` |
 | Bytes fail UTF-8 decode | `non_utf8_encoding` |
 | Zero decoded characters | `empty_file` |
-| tiktoken count > `max_doc_tokens` | `oversize` |
+| tiktoken count > `max_single_doc_tokens` | `oversize` |
 
 Gate failures set `error_reason` but leave `review_reason` null. A pre-LLM rejection is an input-side problem — the operator fixes the file or the scan configuration — and does not need a human review queue. Consumers distinguish the two cases by `classification.llm is null AND route is null`.
 
@@ -100,7 +102,7 @@ non_txt_suffix, non_utf8_encoding, empty_file, oversize,
 llm_api_error, llm_envelope_error, llm_response_missing, llm_schema_mismatch
 ```
 
-see [](../README.md#trade-offs-and-limitations)
+Where these codes stop short of what a production consumer would want, see [Trade-offs And Limitations](../README.md#trade-offs-and-limitations).
 
 ---
 
@@ -110,28 +112,30 @@ see [](../README.md#trade-offs-and-limitations)
 
 | Path | Condition | Route | Confidence | Conflict | Review |
 |---|---|---|---|---|---|
-| A | keyword agrees with LLM | LLM label | LLM score | false | null |
-| B1 | LLM available, no keyword hit, non-urgent | LLM label | LLM score | false | null |
-| B2 | LLM available, no keyword hit, urgent | `urgent` | LLM score | false | null |
-| C | keyword vs LLM disagree, keyword strong enough | LLM label | LLM score × conflict penalty | true | `conflict` |
-| D | LLM unavailable (BatchFailure) | keyword label if present, else `general` | keyword score × fallback penalty, else 0.0 | false | mirrored from `error_reason` |
+| A | LLM unavailable (`BatchFailure`) | keyword label if present, else `general` | keyword score × fallback penalty, else 0.0 | false | mirrored from `error_reason` |
+| B1 | keyword and LLM disagree, keyword comparably strong | LLM label | LLM score × conflict penalty | true | `conflict` |
+| B2 | keyword and LLM disagree, LLM decisively stronger or keyword too weak | LLM label | LLM score | false | null |
+| C | keyword agrees with LLM | LLM label | LLM score | false | null |
+| D | no keyword hit, LLM valid | LLM label | LLM score | false | null |
+
+"Comparably strong" is two conditions, both read from `config.reconciliation`: the raw keyword score reaches `conflict_keyword_min_score`, and the keyword score weighted by `string_match_conflict_weight` still reaches the LLM's own score. A full-score keyword hit on a secondary theme — "contract" appearing throughout a document whose actual subject is an urgent access failure — therefore does not drag a confident model call into human review.
 
 Two design choices worth calling out:
 
-- **B1 and B2 are not merged.** They look structurally identical but represent different operator scenarios: B1 is a normal non-urgent document with no keyword signal; B2 is an urgent document the keyword dictionary did not cover. Keeping them separate lets the keyword dictionary be audited by looking at B2-path records — if the same LLM label shows up repeatedly in B2 but not in A, the dictionary is missing a term.
-- **Path C does not override the LLM's route.** The conflict flag is raised, the confidence is penalised, and the record goes to human review, but the LLM label wins. The keyword scorer is a supplementary signal, not a voting peer. If the model is systematically wrong, that is a model-quality incident, not something to paper over with a keyword rule at inference time.
+- **B1 and B2 are not merged.** Both are disagreements, and both give the route to the model; they differ in what the operator is told. B1 raises the conflict flag and books the document for human review; B2 leaves the losing keyword visible in `classification.string_match` and lets the document through. Merging them would either flood the review queue with weak keyword noise or bury the genuine model-versus-dictionary conflicts among it.
+- **B1 does not override the LLM's route.** The conflict flag is raised, the confidence is penalised, and the record goes to human review, but the LLM label still wins. The keyword scorer is a supplementary signal, not a voting peer. If the model is systematically wrong, that is a model-quality incident, not something to paper over with a keyword rule at inference time.
 
 ---
 
-## 5. `review_reason` — Three Levels
+## 5. `review_reason` — Three Tiers
 
-`review_reason` is a single enum field assigned by priority. Only one value can win, so the priority is load-bearing.
+`review_reason` is a single enum field assigned by priority. Only one value can win, so the ordering is load-bearing.
 
-1. **Mirror from `error_reason`.** If `error_reason` is set by a whole-batch or per-document LLM failure, `review_reason` takes the same value (`llm_api_error`, `llm_envelope_error`, `llm_response_missing`, `llm_schema_mismatch`). Pre-LLM gate errors are excluded — they stay null.
-2. **Per-document quality flag.** Already covered by level 1 via mirroring; listed separately so the ordering is explicit.
-3. **Classifier signal.** `conflict` (path C) or `low_confidence` (final_confidence below `low_confidence_threshold`). `conflict` wins over `low_confidence` when both apply.
+0. **Batch delivery failure, mirrored from `error_reason`.** When the whole batch failed and no per-document result survives, `review_reason` takes the batch's value: `llm_api_error` or `llm_envelope_error`. Pre-LLM gate errors are excluded — an unreadable input file is the operator's problem, not a reviewer's, so its `review_reason` stays null.
+1. **Per-document quality failure inside a delivered batch.** `llm_schema_mismatch` when the extracted fields do not satisfy the schema for the chosen keyword, `llm_missing_docs` when the model simply omitted the document. Schema mismatch is tested first.
+2. **Classifier signal.** `conflict` (path B1) or `low_confidence` (`final_confidence` below `llm_low_confidence_threshold`). `conflict` wins when both apply.
 
-The priority ordering exists because a confident keyword fallback on a failed batch can produce a high `final_confidence` on a document the model never saw. Without level 1, that document would land in `miscellaneous.json` unreviewed.
+Tier 0 outranks the rest because a confident keyword fallback on a failed batch can produce a high `final_confidence` on a document the model never saw. Judged on confidence alone, that document would land in `miscellaneous.json` unreviewed.
 
 ---
 
@@ -144,12 +148,13 @@ class LLMDocResult(BaseModel):
     doc_id: str
     keyword: str           # not an enum — off-category values become per-doc schema mismatch
     score: float           # [0.0, 1.0]
-    extracted_fields: dict | None
+    extracted_fields: dict # defaults to {}; the per-keyword schema is checked in pipeline
 
 class LLMBatchResponse(BaseModel):
     results: list[LLMDocResult]
-    usage: dict | None
 ```
+
+Token usage is read off the SDK response object rather than the parsed envelope, so it is not part of the model.
 
 The top-level shape check is strict; the `keyword` value is not. Rationale in section 3.2.
 
@@ -193,7 +198,7 @@ llm_tokens_used          sum of API usage field across calls
 | `miscellaneous.json` | records where `route != "urgent"` AND `review_reason is null` |
 | `urgent.json` | records where `route == "urgent"` |
 | `human_review.json` | records where `review_reason is not null` |
-| `runtime_metadata.json` | counters + `input_file_ids` in processing order + config snapshot |
+| `runtime_metadata.json` | counters, `input_file_ids` in processing order, run start/end timestamps, model name |
 
 The first three are not mutually exclusive. A document that is both urgent and needs a human look appears in both `urgent.json` and `human_review.json`. Route priority and review risk are orthogonal questions; forcing a document into one bucket would hide one of the two answers.
 
@@ -204,3 +209,5 @@ The first three are not mutually exclusive. A document that is both urgent and n
 A document that appears in both `urgent.json` and `human_review.json` is one delivery. When both files fail to write, a naive counter would double-count: `file_errors += 2` for one document, breaking `file_processed + file_errors == len(input_file_ids)`.
 
 `file_store.write_files` tracks first-failure per `(doc_id, source_path)`. The first OSError against a given delivery key increments `file_errors` and decrements `file_processed`; subsequent failures for the same key are logged only. The invariant holds regardless of how many view files a single record participates in.
+
+A failed view file does not abort the remaining writes, and the counters are snapshotted into `runtime_metadata.json` after all three view files have been attempted, so the metadata file reports the partial delivery rather than the state the pipeline ended on. `app.main` returns 1 when any output file failed, naming them in the log.

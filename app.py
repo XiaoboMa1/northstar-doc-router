@@ -65,8 +65,11 @@ def main() -> int:
     client = OpenAI(base_url=base_url) if base_url else OpenAI()
 
     records, run_metadata = run(config, metrics, client=client)
-    write_files(records, run_metadata, config)
+    failed_paths = write_files(records, run_metadata, config, metrics)
     metrics.show()
+    if failed_paths:
+        logger.error("output incomplete, could not write: %s", ", ".join(failed_paths))
+        return 1
     return 0
 
 

@@ -1,8 +1,9 @@
-"""Classifier unit tests (T9 + reconcile paths + review_reason priority).
+"""Classifier unit tests: keyword scoring, reconcile paths, review_reason
+priority.
 
 Pure functions — no mocks, no I/O. Covers:
 
-- T9 multi-keyword tiebreak (config-order-first wins).
+- multi-keyword tiebreak (config-order-first wins).
 - reconcile() decision tree: A (LLM missing, with/without kw), B1 (strong
   conflict), B2 (weak disagreement), C (agree), D (no kw, LLM OK).
 - urgent symmetry: urgent_flag branch has been retired — urgent as a first-
@@ -49,7 +50,7 @@ KEYWORDS = ["invoice", "complaint", "contract", "refund", "urgent"]
 
 
 # ===========================================================================
-# T9: multi-keyword tiebreak
+# Multi-keyword tiebreak
 # ===========================================================================
 
 

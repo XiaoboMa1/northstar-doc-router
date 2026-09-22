@@ -1,8 +1,8 @@
 // Documentation-only template. This file is JSONC (JSON with // comments) and
 // is NOT parsed at runtime. Production code writes each block below as an
 // independent file under output/. Separators below indicate the target file.
-// See note/impl-spec.md §2 for the routing contract and note/workflow.md for
-// end-to-end examples.
+// See design/implementation_specification.md §6.4 (impl-spec below) for the
+// routing contract and design/dataflow.md for end-to-end examples.
 //
 // Routing rules:
 //   miscellaneous.json : route != "urgent" AND review_reason is null
@@ -122,7 +122,7 @@
     "error_reason": null
   },
   // Unified unprocessed_file shape (pre-LLM gate). Lands in miscellaneous.json
-  // only (route is null AND review_reason is null). See impl-spec §6.
+  // only (route is null AND review_reason is null). See impl-spec §3.3.
   // error_reason ∈ { non_txt_suffix | non_utf8_encoding | empty_file | oversize }.
   {
     "doc_id": "deadbeefcafef00d",
